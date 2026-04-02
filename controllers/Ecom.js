@@ -422,7 +422,16 @@ app.post("/updateProduct", (req, res) => {
   });
 });
 
+app.get("/getAllUsers", (req, res) => {
+  db.query("SELECT * FROM users ORDER BY user_id DESC", (err, result) => {
+    if (err) return res.status(500).json(err);
 
+    res.json({
+      status: "success",
+      data: result
+    });
+  });
+});
   
 
 // app.get('/secret-route', userMiddleware.isLoggedIn, (req, res, next) => {
