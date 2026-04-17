@@ -4,6 +4,10 @@ const multer = require("multer");
 var cors = require('cors');
 var app = express();
 app.use(cors());
+const QRCode = require("qrcode");
+const bwipjs = require("bwip-js");
+const fs = require("fs");
+const path = require("path");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -20,7 +24,14 @@ const upload = multer({ storage });
 
 
     app.get('/getProduct', (req, res, next) => {
-    db.query(`SELECT * FROM products;`,
+    db.query(`SELECT 
+  p.*,
+  MIN(pi.image) AS images
+FROM products p
+LEFT JOIN product_images pi 
+  ON pi.product_id = p.product_id
+GROUP BY p.product_id
+ORDER BY p.product_id DESC;`,
     (err, result) => {
       if (err) {
         console.log('error: ', err);
@@ -37,6 +48,106 @@ const upload = multer({ storage });
     }
   );
   });
+
+  app.get("/getCustomers", (req, res) => {
+  db.query("SELECT * FROM customers ORDER BY customer_id DESC", (err, result) => {
+    if (err) return res.json({ error: err });
+    res.json({ data: result });
+  });
+});
+
+  app.post("/addCustomer", (req, res) => {
+
+  const data = req.body;
+
+  db.query(
+    `INSERT INTO customers 
+    (name, phone, email, address, description, followup_date, visit_date, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      data.name,
+      data.phone,
+      data.email,
+      data.address,
+      data.description,
+      data.followup_date,
+      data.visit_date,
+      data.status || "Pending"
+    ],
+    (err, result) => {
+      if (err) return res.json({ error: err });
+      res.json({ success: true });
+    }
+  );
+});
+
+app.post("/updateCustomer/:id", (req, res) => {
+
+  const { id } = req.params;
+
+  const {
+    name,
+    phone,
+    email,
+    address,
+    description,
+    followup_date,
+    visit_date,
+    status
+  } = req.body;
+
+  const sql = `
+    UPDATE customers SET
+      name = ?,
+      phone = ?,
+      email = ?,
+      address = ?,
+      description = ?,
+      followup_date = ?,
+      visit_date = ?,
+      status = ?
+    WHERE customer_id = ?
+  `;
+
+  db.query(
+    sql,
+    [
+      name,
+      phone,
+      email,
+      address,
+      description,
+      followup_date,
+      visit_date,
+      status,
+      id
+    ],
+    (err, result) => {
+      if (err) {
+        console.log("❌ UPDATE ERROR:", err);
+        return res.status(500).json({ error: err });
+      }
+
+      res.json({
+        success: true,
+        message: "Customer updated successfully"
+      });
+    }
+  );
+});
+
+  app.get("/todayVisits", (req, res) => {
+
+  db.query(
+    `SELECT COUNT(*) as total FROM customers 
+     WHERE DATE(visit_date) = CURDATE()`,
+    (err, result) => {
+      if (err) return res.json({ error: err });
+      res.json(result[0]);
+    }
+  );
+
+});
 
     app.get('/getProductEcom', (req, res, next) => {
     db.query(`SELECT 
@@ -122,62 +233,129 @@ app.post("/getProductByid", (req, res) => {
 
 app.post("/insertProduct", upload.array("images", 10), (req, res) => {
 
-
-
   const {
     product_name,
     description,
     price,
     qty,
+    pic,
     mrp,
     size,
     brand,
     finish
   } = req.body;
 
-  const sql = `
-    INSERT INTO products 
-    (product_name, description, price, qty, mrp, size, brand, finish, published)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+  const brandCode = "AK";
+  const category = brand ? brand.split(" ")[0].toUpperCase() : "GEN";
+  const prefix = `${brandCode}-${category}`;
+
+  const getLastCodeSql = `
+    SELECT product_code FROM products 
+    WHERE product_code LIKE '${prefix}-%'
+    ORDER BY CAST(SUBSTRING_INDEX(product_code, '-', -1) AS UNSIGNED) DESC
+    LIMIT 1
   `;
 
-  db.query(sql, [
-    product_name,
-    description,
-    price,
-    qty,
-    mrp,
-    size,
-    brand,
-    finish
-  ], (err, result) => {
+  db.query(getLastCodeSql, (err, result) => {
 
     if (err) return res.send(err);
 
-    const productId = result.insertId;
+    let nextNumber = 1;
 
-    console.log("PRODUCT ID:", productId);
+    if (result.length > 0) {
+      const lastCode = result[0].product_code;
+      const lastNumber = parseInt(lastCode.split("-")[2]);
+      nextNumber = lastNumber + 1;
+    }
 
-    // ✅ INSERT IMAGES (LOOP METHOD)
-    if (req.files && req.files.length > 0) {
+    const formattedNumber = String(nextNumber).padStart(3, "0");
+    const product_code = `${prefix}-${formattedNumber}`;
 
-      req.files.forEach((file, index) => {
+    const sql = `
+      INSERT INTO products 
+      (product_code, product_name, description, price, qty, pic, mrp, size, brand, finish, published)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `;
+
+    db.query(sql, [
+      product_code,
+      product_name,
+      description,
+      price,
+      qty,
+      pic,
+      mrp,
+      size,
+      brand,
+      finish
+    ], (err, result2) => {
+
+      if (err) return res.send(err);
+
+      const productId = result2.insertId;
+
+      // ✅ IMAGE INSERT
+      if (req.files && req.files.length > 0) {
+        req.files.forEach((file, index) => {
+          db.query(
+            "INSERT INTO product_images (product_id, image, is_primary) VALUES (?, ?, ?)",
+            [productId, file.filename, index === 0 ? 1 : 0]
+          );
+        });
+      }
+
+      // ✅ PATH FIX (IMPORTANT 🔥)
+      const barcodePath = path.join(__dirname, "../uploads/barcodes", `${product_code}.png`);
+      const qrPath = path.join(__dirname, "../uploads/qrcodes", `${product_code}.png`);
+
+      // ✅ GENERATE QR
+      QRCode.toFile(
+        qrPath,
+        `https://yourdomain.com/product/${product_code}`,
+        (err3) => {
+          if (err3) console.log("QR ERROR:", err3);
+        }
+      );
+
+      // ✅ GENERATE BARCODE
+      bwipjs.toBuffer({
+        bcid: "code128",
+        text: product_code,
+        scale: 3,
+        height: 10,
+        includetext: true
+      }, (err4, png) => {
+
+        if (err4) {
+          console.log("BARCODE ERROR:", err4);
+        } else {
+          fs.writeFileSync(barcodePath, png);
+        }
+
+        // ✅ SAVE FILE PATH DB
+        const barcodeFile = `uploads/barcodes/${product_code}.png`;
+        const qrFile = `uploads/qrcodes/${product_code}.png`;
 
         db.query(
-          "INSERT INTO product_images (product_id, image, is_primary) VALUES (?, ?, ?)",
-          [productId, file.filename, index === 0 ? 1 : 0],
-          (err2) => {
-            if (err2) console.log("IMG ERROR:", err2);
+          "UPDATE products SET barcode=?, qrcode=? WHERE product_id=?",
+          [barcodeFile, qrFile, productId],
+          (err5) => {
+
+            if (err5) return res.send(err5);
+
+            res.send({
+              msg: "Product Added + Barcode + QR ✅",
+              product_code,
+              barcode: barcodeFile,
+              qrcode: qrFile
+            });
+
           }
         );
 
       });
 
-      res.send({ msg: "Product + Images Added ✅" });
-
-    } else {
-      res.send({ msg: "No images ❌" });
-    }
+    });
 
   });
 
@@ -307,6 +485,7 @@ app.post("/updateProduct", upload.array("images", 10), (req, res) => {
     description,
     price,
     qty,
+    pic,
     mrp,
     size,
     brand,
@@ -320,6 +499,7 @@ app.post("/updateProduct", upload.array("images", 10), (req, res) => {
       description=?,
       price=?,
       qty=?,
+      pic=?,
       mrp=?,
       size=?,
       brand=?,
@@ -335,6 +515,7 @@ app.post("/updateProduct", upload.array("images", 10), (req, res) => {
       description,
       price,
       qty,
+      pic,
       mrp,
       size,
       brand,

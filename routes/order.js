@@ -9,6 +9,28 @@ app.use(fileUpload({
     createParentPath: true
 }));
 
+
+ app.get('/getOrders', (req, res, next) => {
+    db.query(`SELECT * FROM orders 
+     WHERE order_id = "" 
+     ORDER BY order_id DESC;`,
+    (err, result) => {
+      if (err) {
+        console.log('error: ', err);
+        return res.status(400).send({
+          data: err,
+          msg: 'failed',
+        });
+      } else {
+        return res.status(200).send({
+          data: result,
+          msg: 'Success',
+  });
+  }
+    }
+  );
+  });
+
 app.get("/getOrdersByUser/:user_id", (req, res) => {
 
   const { user_id } = req.params;

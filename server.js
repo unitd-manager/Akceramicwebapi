@@ -1,24 +1,24 @@
 const express = require("express");
 const cors = require("cors");
-var fs = require('fs');
+// var fs = require('fs');
 const app = express();
 
-var http = require('http');
-var https = require('https');
+// var http = require('http');
+// var https = require('https');
 
-var privateKey  = fs.readFileSync('sslcrt/server.key', 'utf8');
-var certificate = fs.readFileSync('sslcrt/server.crt', 'utf8');
-var credentials = {key: privateKey, cert: certificate};
+// var privateKey  = fs.readFileSync('sslcrt/server.key', 'utf8');
+// var certificate = fs.readFileSync('sslcrt/server.crt', 'utf8');
+// var credentials = {key: privateKey, cert: certificate};
 
 app.use(cors());
 app.use(express.json());
 
 
 
-var httpServer = http.createServer(app);
-var httpsServer = https.createServer(credentials, app);
-httpServer.listen(4001);
-httpsServer.listen(4000)
+// var httpServer = http.createServer(app);
+// var httpsServer = https.createServer(credentials, app);
+// httpServer.listen(4001);
+// httpsServer.listen(4000)
 
 app.use("/uploads", express.static("uploads"));
 
